@@ -13,7 +13,7 @@ def save_json(data, path: Path):
         json.dump(data, f, indent=2)
 
 def now_iso_pst():
-    # store local ISO; your OS tz is fine
+    # store local ISO
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 def runtime_versions():
