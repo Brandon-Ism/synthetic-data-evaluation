@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy import stats
+from typing import Sequence
 
 # ----------------------------
 # Helpers to detect / fit marginals
@@ -46,6 +47,32 @@ def _bounded_continuous(series: pd.Series) -> Optional[Tuple[float, float]]:
 
 def _aic(loglik: float, k_params: int, n: int) -> float:
     return -2*loglik + 2*k_params
+
+def _dirichlet_smooth(probs: np.ndarray, alpha: float = 0.5) -> np.ndarray:
+    probs = np.asarray(probs, float)
+    probs = probs + alpha
+    probs /= probs.sum()
+    return probs
+
+def _is_low_card_int(series: pd.Series, max_unique: int = 20) -> bool:
+    s = series.dropna()
+    return np.issubdtype(s.dtype, np.integer) and s.nunique(dropna=True) <= max_unique
+
+def _detect_spikes(s: pd.Series, min_prob: float = 0.18, max_spikes: int = 3) -> list[tuple[float, float]]:
+    """Return [(value, prob), ...] for prominent spikes (e.g., 40 hours)."""
+    vc = s.value_counts(normalize=True, dropna=True).sort_values(ascending=False)
+    spikes = [(float(v), float(p)) for v, p in vc.items() if p >= min_prob]
+    return spikes[:max_spikes]
+
+def _estimate_heaping_prob(s: pd.Series, spikes: Sequence[tuple[float, float]]) -> float:
+    """Heaping toward multiples of 5 for 'hours_per_week'-like columns."""
+    spike_vals = {v for v, _ in spikes}
+    residual = s[~s.isin(spike_vals)].dropna()
+    if residual.empty:
+        return 0.0
+    is_heap = (residual.astype(float) % 5 == 0)
+    return float(is_heap.mean())
+
 
 def _fit_continuous_candidates(x: np.ndarray) -> FitResult:
     """
@@ -142,36 +169,101 @@ def _fit_count(s: pd.Series) -> FitResult:
 def _sample_from_fit(fr: FitResult, n: int, rng: np.random.Generator) -> np.ndarray:
     k = fr.kind
     p = fr.params
+
     if k == "constant":
         return np.full(n, p["value"])
+
     if k == "normal":
         return rng.normal(p["mu"], p["sigma"], size=n)
+
     if k == "lognorm":
         return stats.lognorm(s=p["shape"], loc=p["loc"], scale=p["scale"]).rvs(size=n, random_state=rng)
+
     if k == "gamma":
         return stats.gamma(a=p["a"], loc=p["loc"], scale=p["scale"]).rvs(size=n, random_state=rng)
+
     if k == "expon":
         return stats.expon(loc=p["loc"], scale=p["scale"]).rvs(size=n, random_state=rng)
+
     if k == "student_t":
         return stats.t(df=p["df"], loc=p["loc"], scale=p["scale"]).rvs(size=n, random_state=rng)
+
     if k == "beta_scaled":
         y = stats.beta(a=p["a"], b=p["b"]).rvs(size=n, random_state=rng)
         return p["lo"] + y * (p["hi"] - p["lo"])
+
     if k == "bernoulli":
         return rng.binomial(1, p["p"], size=n)
+
     if k == "categorical":
         cats = np.array(p["categories"], dtype=object)
         probs = np.array(p["probs"], dtype=float)
+        # safety: renormalize in case of tiny drift
+        s = probs.sum()
+        if s <= 0:
+            probs = np.full_like(probs, 1.0 / len(probs))
+        else:
+            probs = probs / s
         idx = rng.choice(len(cats), size=n, p=probs)
         return cats[idx]
+
     if k == "poisson":
         return rng.poisson(p["lam"], size=n)
+
     if k == "neg_binom":
         r, prob = p["r"], p["p"]
-        # numpy uses (n, p) for number of successes? Use gamma-poisson mixture:
-        # NB(r,p) ~ Poisson(Gamma(r, (1-p)/p))
-        lam = rng.gamma(shape=r, scale=(1 - prob) / prob, size=n)
+        # NB(r, p) via Gamma-Poisson mixture:
+        # Var = m + m^2/r  and NB ~ Poisson(Gamma(r, (1-p)/p))
+        lam = rng.gamma(shape=r, scale=(1.0 - prob) / max(prob, 1e-12), size=n)
         return rng.poisson(lam)
+
+    if k == "spike_mixture":
+        # p["spikes"] = [(value, prob), ...] with probs coming from GT
+        # p["base_kind"] in {"poisson","neg_binom",...}, p["base"] = params dict
+        spikes = p["spikes"]
+        spike_vals = np.array([float(v) for v, _ in spikes], dtype=float)
+        spike_probs = np.array([float(pr) for _, pr in spikes], dtype=float)
+
+        # total spike mass (clipped to [0,1])
+        p_spike = float(np.clip(spike_probs.sum(), 0.0, 1.0))
+
+        # normalize spike probabilities if needed
+        s = spike_probs.sum()
+        if s > 0:
+            spike_probs = spike_probs / s
+        else:
+            # degenerate: no mass -> fall back to base
+            spike_probs = None
+            p_spike = 0.0
+
+        draw_spike = rng.random(n) < p_spike
+        out = np.empty(n, dtype=float)
+
+        # draw from spikes
+        n_spike = int(draw_spike.sum())
+        if n_spike > 0:
+            idx = rng.choice(len(spike_vals), size=n_spike, p=spike_probs)
+            out[draw_spike] = spike_vals[idx]
+
+        # draw from base on the remainder
+        n_base = int((~draw_spike).sum())
+        if n_base > 0:
+            base_fit = FitResult(kind=p["base_kind"], params=p["base"])
+            out[~draw_spike] = _sample_from_fit(base_fit, n_base, rng)
+
+        # OPTIONAL: heaping to nearest 5 with probability 'heap_prob' if provided
+        heap_prob = float(p.get("heap_prob", 0.0))
+        if heap_prob > 0:
+            mask = ~draw_spike
+            if mask.any():
+                hmask = rng.random(int(mask.sum())) < heap_prob
+                vals = out[mask]
+                nearest5 = np.round(vals / 5.0) * 5.0
+                vals[hmask] = nearest5[hmask]
+                out[mask] = vals
+
+        return out
+
     raise ValueError(f"Unknown fit kind: {k}")
 
 # ----------------------------
@@ -183,29 +275,83 @@ def fit_marginals(
     exclude: Optional[List[str]] = None
 ) -> Dict[str, FitResult]:
     """
-    Fit one distribution per column in the *raw* training dataframe.
+    Fit one distribution per column in the RAW training dataframe.
+    - Binary -> Bernoulli
+    - Low-card integers (<=20 uniques) -> categorical pmf  (e.g., education_num)
+    - Counts (nonneg ints) with spikes -> spike_mixture (spikes + Poisson/NB residual)
+    - Other counts -> Poisson or NB (overdispersion test)
+    - Continuous (incl. high-card bounded ints like 'age') -> AIC-selected family
     """
     exclude = set(exclude or [])
     fits: Dict[str, FitResult] = {}
     for col in df_train.columns:
         if col in exclude:
             continue
-        s = df_train[col]
+        s = df_train[col].dropna()
+
         try:
+            # 1) Binary
             if _is_binary(s):
                 fit = _fit_binary(s.astype(int))
+
+            # 2) Low-card integers -> categorical (preserve spikes exactly)
+            elif _is_low_card_int(s):
+                vc = s.value_counts(normalize=True, dropna=True).sort_index()
+                cats = vc.index.to_list()
+                probs = _dirichlet_smooth(vc.values.astype(float))
+                fit = FitResult(kind="categorical",
+                                params={"categories": cats, "probs": probs.tolist()},
+                                notes="low-card-int→categorical")
+
+            # 3) Strings / mixed small-card -> categorical
             elif _is_categorical(s):
                 fit = _fit_categorical(s.astype(str))
+
+            # 4) Nonnegative integer counts
             elif _is_count(s):
-                fit = _fit_count(s)
+                # Detect dominant spikes (e.g., hours_per_week==40, capital_gain==0)
+                spikes = _detect_spikes(s)
+                if spikes:
+                    # residual without spikes
+                    base_vals = s[~s.isin([v for v, _ in spikes])]
+                    if base_vals.dropna().empty:
+                        base_fit = FitResult(kind="poisson", params={"lam": float(s.mean())}, notes="residual-empty")
+                    else:
+                        base_fit = _fit_count(base_vals)
+                    heap_prob = _estimate_heaping_prob(s, spikes)
+                    fit = FitResult(
+                        kind="spike_mixture",
+                        params={
+                            "spikes": spikes,                      # [(value, prob), ...]
+                            "base": base_fit.params,               # dict
+                            "base_kind": base_fit.kind,            # "poisson" | "neg_binom"
+                            "heap_prob": heap_prob                 # optional rounding-to-5
+                        },
+                        notes=f"spikes={spikes}, heap={heap_prob:.2f}"
+                    )
+                else:
+                    fit = _fit_count(s)
+
+            # 5) Everything else -> continuous candidates via AIC
             else:
-                fit = _fit_continuous_candidates(s.to_numpy(dtype=float))
+                # If it's an integer but high-card and human-bounded (e.g., age),
+                # treat as continuous for better shape + copula handling.
+                if np.issubdtype(s.dtype, np.integer) and s.nunique() > 50 and s.min() >= 0 and s.max() <= 150:
+                    x = s.to_numpy(dtype=float)
+                else:
+                    x = s.to_numpy(dtype=float)
+                fit = _fit_continuous_candidates(x)
+
         except Exception as e:
-            # fallback: empirical categorical if disaster happens
+            # Robust fallback
             fit = _fit_categorical(s.astype(str))
             fit.notes = f"fallback:{type(e).__name__}"
+
         fits[col] = fit
+
     return fits
+
+
 
 def sample_independent(
     fits: Dict[str, FitResult],

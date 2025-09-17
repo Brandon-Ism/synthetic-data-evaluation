@@ -10,6 +10,7 @@ from experiments.adult_tabular.data import prepare_splits, _download_and_extract
 from experiments.adult_tabular.simulate import simulate_smart
 from experiments.adult_tabular.synth_sdv import train_and_sample_sdv
 from experiments.adult_tabular.evaluate import js_for_continuous_columns, global_mmd_and_c2st
+from experiments.adult_tabular.simulate import fit_marginals
 
 def parse_args():
     p = argparse.ArgumentParser(description="Adult Tabular (SDV): GT vs SIM vs SYN")
@@ -58,6 +59,13 @@ def main():
     )
     train_df = train_df.dropna().reset_index(drop=True)
     eval_df  = eval_df.dropna().reset_index(drop=True)
+
+
+    fits = fit_marginals(train_df, exclude=["income"])
+    for col in ["education_num", "hours_per_week", "capital_gain", "capital_loss", "age"]:
+        fr = fits[col]
+        print(f"[FIT] {col}: kind={fr.kind} notes={getattr(fr, 'notes', '')}")
+
 
     # 2) SIM: per-feature fitted marginals
     # We exclude the label from generation; metrics/eval operate on features after encoding.
