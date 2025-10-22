@@ -1,0 +1,95 @@
+{
+  "experiment": {
+    "name": "adult_tabular",
+    "timestamp": "2025-09-16T23:08:12-07:00",
+    "seed": 42
+  },
+  "data": {
+    "ground_truth": {
+      "type": "external",
+      "source": "UCI Adult (1994), cleaned, train/eval split",
+      "n_train": 33916,
+      "n_eval_reference": 5000,
+      "preprocess": {
+        "scaler": "standard",
+        "cat_encoding": "onehot"
+      },
+      "feature_dim": 104
+    },
+    "simulated": {
+      "generator": "per_feature_gaussian_copula",
+      "params": {
+        "exclude": [
+          "income"
+        ]
+      },
+      "n": 5000
+    },
+    "synthetic": {
+      "library": "SDV",
+      "model": "CTGAN",
+      "train": {
+        "epochs": 300,
+        "batch_size": 500,
+        "enforce_rounding": true,
+        "pac": 10
+      },
+      "sampled_n": 5000
+    }
+  },
+  "metrics": {
+    "continuous_js": {
+      "age": {
+        "gt_vs_sim": 0.0038973899959455468,
+        "gt_vs_syn": 0.018075281003472287,
+        "sim_vs_syn": 0.013737401216407975
+      },
+      "fnlwgt": {
+        "gt_vs_sim": 0.16522094256599887,
+        "gt_vs_syn": 0.2806529766366396,
+        "sim_vs_syn": 0.05498951317354726
+      },
+      "education_num": {
+        "gt_vs_sim": 0.5537422776423064,
+        "gt_vs_syn": 0.023932511378018086,
+        "sim_vs_syn": 0.5557639201777063
+      },
+      "capital_gain": {
+        "gt_vs_sim": 0.000992227031418446,
+        "gt_vs_syn": 0.017682652638364507,
+        "sim_vs_syn": 0.017136598684233544
+      },
+      "capital_loss": {
+        "gt_vs_sim": 0.9588668938290483,
+        "gt_vs_syn": 0.04833463854995386,
+        "sim_vs_syn": 0.999999999991424
+      },
+      "hours_per_week": {
+        "gt_vs_sim": 0.3371790090954438,
+        "gt_vs_syn": 0.18238768707925204,
+        "sim_vs_syn": 0.44768957853261626
+      }
+    },
+    "global": {
+      "mmd_rbf_gt_syn": 0.006707590285546905,
+      "mmd_rbf_gt_sim": 0.0029593003584909017,
+      "mmd_rbf_sim_syn": 0.008793198616141362,
+      "c2st_auc_gt_syn": 0.7460984399999999,
+      "c2st_auc_gt_sim": 0.57630168,
+      "c2st_auc_sim_syn": 0.76126728
+    }
+  },
+  "figures": [
+    "hist_age.png",
+    "hist_capital_gain.png",
+    "hist_capital_loss.png",
+    "hist_education_num.png",
+    "hist_fnlwgt.png",
+    "hist_hours_per_week.png"
+  ],
+  "notes": "SIM: per-feature marginals with optional Gaussian copula for continuous dependence; SYN: SDV (CTGAN/TVAE) trained on raw Adult; evaluation in standardized+one-hot space.",
+  "versions": {
+    "python": "3.12.3",
+    "platform": "Linux 5.15.167.4-microsoft-standard-WSL2 (x86_64)"
+  }
+}

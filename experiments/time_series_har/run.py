@@ -2,6 +2,22 @@
 import argparse, json
 from pathlib import Path
 import numpy as np
+from experiments.time_series_har.evaluate import evaluate_ts, evaluate_ts_by_class
+
+
+def _to_native(o):
+    if isinstance(o, (np.floating,)):
+        return float(o)
+    if isinstance(o, (np.integer,)):
+        return int(o)
+    if isinstance(o, (np.ndarray,)):
+        return o.tolist()
+    if isinstance(o, dict):
+        return {k: _to_native(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [ _to_native(v) for v in o ]
+    return o
+
 
 from experiments.time_series_har.data import prepare_windows
 from experiments.time_series_har.simulate import simulate_dfm_mosaic, DFMParams
@@ -56,6 +72,17 @@ def main():
     sim_ref = X_sim[:n]
     metrics_gt_sim = evaluate_ts(gt_ref, sim_ref, fig_dir=fig_dir)
 
+
+    # 3b) Class-wise evaluation (GT vs SIM)
+    metrics_by_class = evaluate_ts_by_class(
+        gt=gt_ref, gt_y=y_eval[:n],
+        sim=sim_ref, sim_y=y_sim[:n],
+        class_names=meta["class_names"],
+        fig_dir=fig_dir / "per_class",
+        per_class_figs=True,
+    )
+
+
     # 4) Persist JSON
     results = {
         "experiment": {
@@ -73,11 +100,20 @@ def main():
                 "n": int(len(sim_ref))
             }
         },
-        "metrics": {"gt_vs_sim": metrics_gt_sim},
-        "figures": ["psd_overlay_ch0.png", "acf_overlay_ch0.png"]
+        "metrics": {
+            "gt_vs_sim_global": metrics_gt_sim,
+            "gt_vs_sim_by_class": metrics_by_class
+        },
+        "figures": [
+            "psd_overlay_ch0.png",
+            "acf_overlay_ch0.png",
+            # class-wise grids will be saved under figures/per_class/*.png
+        ]
     }
+
     with open(out_path, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(_to_native(results), f, indent=2)
+
     print(f"Saved results -> {out_path}")
     print(f"Saved figures -> {fig_dir}")
 

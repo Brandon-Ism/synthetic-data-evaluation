@@ -109,24 +109,115 @@ def save_acf_overlay_fig(Xs: Tuple[np.ndarray, np.ndarray], labels: Tuple[str, s
     acfa = _acf(Xa[0, :, 0], L); acfb = _acf(Xb[0, :, 0], L)
     lags = np.arange(L + 1)
     plt.figure()
-    plt.stem(lags, acfa, basefmt=" ", linefmt="-", markerfmt="o", label=f"{a}", use_line_collection=True)
-    plt.stem(lags, acfb, basefmt=" ", linefmt="-", markerfmt="x", label=f"{b}", use_line_collection=True)
+    plt.stem(lags, acfa, basefmt=" ", linefmt="-", markerfmt="o", label=f"{a}")
+    plt.stem(lags, acfb, basefmt=" ", linefmt="-", markerfmt="x", label=f"{b}")
     plt.xlabel("Lag"); plt.ylabel("ACF"); plt.title("Channel 0 ACF overlay (single window)")
     plt.legend(); plt.tight_layout()
     plt.savefig(out_path); plt.close()
+
+
+
+def save_psd_grid_per_class(Xa, Xb, class_name: str, fig_dir: Path, fs: float = 50.0, nperseg: int = 64):
+    """
+    Save a 3x3 grid of normalized PSD overlays for all 9 channels: GT vs SIM for one class.
+    """
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    C = Xa.shape[2]
+    assert C == 9, "HAR grid assumes 9 channels (3x3)."
+    fig, axes = plt.subplots(3, 3, figsize=(10, 8), sharex=True, sharey=True)
+    axes = axes.ravel()
+    T = Xa.shape[1]
+    for c in range(C):
+        f, Pa = welch(Xa[:, :, c].reshape(-1, T).T, fs=fs, nperseg=nperseg, axis=0)
+        _, Pb = welch(Xb[:, :, c].reshape(-1, T).T, fs=fs, nperseg=nperseg, axis=0)
+        Pa = (Pa.mean(axis=1) + EPS); Pb = (Pb.mean(axis=1) + EPS)
+        Pa /= Pa.sum(); Pb /= Pb.sum()
+        ax = axes[c]
+        ax.plot(f, Pa, label="GT")
+        ax.plot(f, Pb, label="SIM")
+        ax.set_title(f"ch{c}")
+    axes[0].legend()
+    fig.suptitle(f"PSD overlay — {class_name}")
+    fig.tight_layout()
+    fig.savefig(fig_dir / f"psd_grid_{class_name}.png")
+    plt.close(fig)
+
+def save_acf_grid_per_class(Xa, Xb, class_name: str, fig_dir: Path, L: int = 20):
+    """
+    Save a 3x3 grid of ACF overlays (lags 0..L) for all 9 channels: GT vs SIM for one class.
+    """
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    C = Xa.shape[2]
+    assert C == 9, "HAR grid assumes 9 channels (3x3)."
+    fig, axes = plt.subplots(3, 3, figsize=(10, 8), sharex=True, sharey=True)
+    axes = axes.ravel()
+    lags = np.arange(L + 1)
+    for c in range(C):
+        acfa = np.stack([_acf(x, L) for x in Xa[:, :, c][:min(len(Xa), 64)]], 0).mean(0)
+        acfb = np.stack([_acf(x, L) for x in Xb[:, :, c][:min(len(Xb), 64)]], 0).mean(0)
+        ax = axes[c]
+        ax.plot(lags, acfa, marker="o", label="GT")
+        ax.plot(lags, acfb, marker="x", label="SIM")
+        ax.set_title(f"ch{c}")
+    axes[0].legend()
+    fig.suptitle(f"ACF overlay — {class_name}")
+    fig.tight_layout()
+    fig.savefig(fig_dir / f"acf_grid_{class_name}.png")
+    plt.close(fig)
 
 # ----------------------------
 # Orchestrator
 # ----------------------------
 
-def evaluate_ts(gt: np.ndarray, other: np.ndarray, fig_dir: Path) -> Dict:
+def evaluate_ts(gt: np.ndarray, sim: np.ndarray, fig_dir: Path) -> Dict:
     fig_dir.mkdir(parents=True, exist_ok=True)
     out = {}
-    out["psd_js"] = psd_js_per_channel(gt, other)
-    out["acf_delta"] = acf_delta_per_channel(gt, other, L=20)
-    out["corr_delta_fro"] = corr_delta_fro(gt, other)
-    out["mmd_rbf"] = mmd_rbf_windows(gt, other)
+    out["psd_js"] = psd_js_per_channel(gt, sim)
+    out["acf_delta"] = acf_delta_per_channel(gt, sim, L=20)
+    out["corr_delta_fro"] = corr_delta_fro(gt, sim)
+    out["mmd_rbf"] = mmd_rbf_windows(gt, sim)
     # quick figures
-    save_psd_overlay_fig((gt, other), ("GT", "OTHER"), fig_dir / "psd_overlay_ch0.png")
-    save_acf_overlay_fig((gt, other), ("GT", "OTHER"), fig_dir / "acf_overlay_ch0.png")
+    save_psd_overlay_fig((gt, sim), ("GT", "SIM"), fig_dir / "psd_overlay_ch0.png")
+    save_acf_overlay_fig((gt, sim), ("GT", "SIM"), fig_dir / "acf_overlay_ch0.png")
     return out
+
+
+def evaluate_ts_by_class(
+    gt: np.ndarray, gt_y: np.ndarray,
+    sim: np.ndarray, sim_y: np.ndarray,
+    class_names: list[str],
+    fig_dir: Path,
+    per_class_figs: bool = True,
+) -> Dict:
+    """
+    Compute fidelity metrics per class. For each class k:
+      - size-match GT_k and SIM_k (downsample to min count)
+      - compute psd_js, acf_delta, corr_delta_fro, mmd_rbf
+      - (optionally) save 3x3 PSD/ACF grids across channels
+    Returns dict[class_name] -> metrics dict
+    """
+    out: Dict[str, Dict] = {}
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    classes = np.unique(gt_y)
+    for k in classes:
+        cname = class_names[int(k)] if int(k) < len(class_names) else f"class_{k}"
+        gt_k = gt[gt_y == k]
+        sim_k = sim[sim_y == k]
+        if len(gt_k) == 0 or len(sim_k) == 0:
+            continue
+        n = min(len(gt_k), len(sim_k))
+        gt_ref = gt_k[:n]
+        sim_ref = sim_k[:n]
+        metrics = {
+            "psd_js": psd_js_per_channel(gt_ref, sim_ref),
+            "acf_delta": acf_delta_per_channel(gt_ref, sim_ref, L=20),
+            "corr_delta_fro": corr_delta_fro(gt_ref, sim_ref),
+            "mmd_rbf": mmd_rbf_windows(gt_ref, sim_ref),
+            "n": int(n),
+        }
+        out[cname] = metrics
+        if per_class_figs:
+            save_psd_grid_per_class(gt_ref, sim_ref, cname, fig_dir)
+            save_acf_grid_per_class(gt_ref, sim_ref, cname, fig_dir)
+    return out
+
