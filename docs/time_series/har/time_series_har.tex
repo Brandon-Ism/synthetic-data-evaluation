@@ -1,0 +1,219 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{enumitem}
+
+\title{Time-Series Fidelity Evaluation \\
+UCI Human Activity Recognition with DFM-Mosaic Simulation}
+\author{Independent Study: Information-Theoretic Fidelity of Ground Truth vs Simulated Data}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+This document describes the end-to-end pipeline for time-series fidelity analysis on the UCI Human Activity Recognition (HAR) dataset. It covers data characteristics and units, windowing and sampling, preprocessing, the DFM-mosaic simulator, and a multi-domain fidelity suite. Each metric is defined mathematically and its computation protocol is specified, including the axes over which averages are taken and how windows are pooled. Results are produced globally and per activity class.
+
+\section{Dataset, Signals, and Windowing}
+\subsection{Signals and Units}
+We use the \textit{UCI Human Activity Recognition Using Smartphones} dataset. Each example is a fixed-length multivariate time series window with the following channels:
+\[
+\texttt{[body\_acc\_x, body\_acc\_y, body\_acc\_z, body\_gyro\_x, body\_gyro\_y, body\_gyro\_z, total\_acc\_x, total\_acc\_y, total\_acc\_z]}.
+\]
+\begin{itemize}[leftmargin=1.25em]
+\item Sampling frequency: \( f_s = 50~\mathrm{Hz} \) \(\Rightarrow\) sampling period \( \Delta t = 0.02~\mathrm{s} \).
+\item Window length: \( T = 128 \) samples \(\Rightarrow\) \( 2.56~\mathrm{s} \) per window.
+\item Reported units in the original dataset: accelerations in \(g\) and angular velocities in \(\mathrm{rad}/\mathrm{s}\). After standardization, metrics operate on unitless standardized signals.
+\end{itemize}
+
+\subsection{Activities and Labels}
+There are six activity classes:
+\[
+\texttt{WALKING},\ \texttt{WALKING\_UPSTAIRS},\ \texttt{WALKING\_DOWNSTAIRS},\ \texttt{SITTING},\ \texttt{STANDING},\ \texttt{LAYING}.
+\]
+Labels are mapped to integers \( y \in \{0,\ldots,5\} \) using the dataset's provided split. We preserve the official train and test partition.
+
+\section{Preprocessing}
+\subsection{Loading and Shapes}
+From the raw text files (\texttt{Inertial Signals/*\_train.txt} and \texttt{*\_test.txt}), we build:
+\[
+X_{\text{train}} \in \mathbb{R}^{N_{\text{tr}} \times 128 \times 9},\quad
+X_{\text{eval}} \in \mathbb{R}^{N_{\text{ev}} \times 128 \times 9},\quad
+y_{\text{train}} \in \{0,\ldots,5\}^{N_{\text{tr}}},\quad
+y_{\text{eval}} \in \{0,\ldots,5\}^{N_{\text{ev}}}.
+\]
+
+\subsection{Standardization}
+We compute per-channel mean and standard deviation on the training set only and apply the same normalization to train and eval:
+\[
+\hat{X}_{\text{train}}[i,t,c] = \frac{X_{\text{train}}[i,t,c] - \mu_c}{\sigma_c},\quad
+\hat{X}_{\text{eval}}[i,t,c]   = \frac{X_{\text{eval}}[i,t,c]   - \mu_c}{\sigma_c}.
+\]
+All subsequent metrics are computed on standardized windows \( \hat{X} \). Cached arrays and scaler statistics are stored under \texttt{experiments/time\_series\_har/data\_cache} for reproducibility.
+
+\section{Simulated Data: DFM-Mosaic}
+\subsection{Motivation}
+The Deviation-From-Mean (DFM) mosaic is a non-neural simulator that preserves activity-specific dynamics by recombining empirical deviations from class templates. Simulation is class-conditional.
+
+\subsection{Smoothing and Templates}
+For each window and channel, apply a Savitzky–Golay filter with window \(w_{\text{sg}}=15\) samples and polynomial order \(p_{\text{sg}}=3\), producing a smoothed signal \(\tilde{x}(t)\). For each class \(k\) and channel \(c\), define class envelopes and template mean over all smoothed windows in class \(k\):
+\[
+\mathrm{min}_{k,c}(t),\ \mathrm{max}_{k,c}(t),\ \mathrm{mean}_{k,c}(t) = \tfrac{1}{2}\big(\mathrm{min}_{k,c}(t) + \mathrm{max}_{k,c}(t)\big).
+\]
+
+\subsection{Deviation-From-Mean and Mosaic}
+Define normalized deviation for a smoothed window, using a small \(\varepsilon\) for stability,
+\[
+\mathrm{DFM}_{c}(t) = \frac{\tilde{x}_c(t) - \mathrm{mean}_{k,c}(t)}{\max(|\mathrm{mean}_{k,c}(t)|, \varepsilon)}.
+\]
+To synthesize a new window for class \(k\), choose \(S \sim \{3,\ldots,6\}\) multi-channel DFM segments, each of length \(L_s \in [0.15T, 0.35T]\) samples. Concatenate the selected DFM segments with short linear ramps at seams to avoid discontinuities. Reconstruct the signal multiplicatively and add realistic residual noise:
+\[
+x^{\text{sim}}_c(t) = \mathrm{mean}_{k,c}(t)\big(1 + \widetilde{\mathrm{DFM}}_{c}(t)\big) + \alpha\, r_{k,c}(t),
+\]
+where \( \widetilde{\mathrm{DFM}} \) is the mosaicked DFM, \( r_{k,c}(t) \) is a residual from a randomly selected real window in class \(k\), and \(\alpha\) is a residual scale (default \( \alpha=1.0 \)). Class counts are sampled in proportion to the class prior of the reference split and total \(n\) is matched to the evaluation set.
+
+\subsection{Parameter Summary}
+\begin{table}[H]
+\centering
+\caption{DFM-Mosaic parameters and units}
+\begin{tabular}{lll}
+\toprule
+Parameter & Meaning & Default \\
+\midrule
+\(w_{\text{sg}}, p_{\text{sg}}\) & Savitzky–Golay window and polynomial order & \(15\ \mathrm{samples}\), \(3\) \\
+Segments & Number of DFM segments per window & 3 to 6 (integer) \\
+Segment length & Fraction of window length \(T=128\) & \(0.15\) to \(0.35\) \\
+Reconstruction & Additive or multiplicative & multiplicative \\
+Residual scale \(\alpha\) & Noise reinjection multiplier & \(1.0\) \\
+Seam smoothing & Linear ramp at boundaries & enabled \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Fidelity Metrics and Exact Computation Protocol}
+Metrics are computed on standardized windows. Two evaluation scopes are produced:
+\begin{enumerate}[leftmargin=1.25em]
+\item \textbf{Global}: pool all evaluation windows across classes, size-match GT and SIM to the same \(n\).
+\item \textbf{Per class}: for each activity \(k\), size-match GT and SIM counts to the minimum available and compute metrics on that subset. Results are reported per channel and per class.
+\end{enumerate}
+
+\subsection{Power Spectral Density Jensen--Shannon (PSD--JS)}
+\paragraph{Definition.} For each channel \(c\), compute Welch PSDs on each window using \(f_s=50~\mathrm{Hz}\), \(n_{\text{perseg}}=64\). Average PSDs over windows to obtain mean spectra \(S^{(\mathrm{gt})}_{c}(f)\) and \(S^{(\mathrm{sim})}_{c}(f)\), then normalize them to probability mass functions:
+\[
+P^{(\mathrm{gt})}_{c}(f) = \frac{S^{(\mathrm{gt})}_{c}(f)}{\sum_{f} S^{(\mathrm{gt})}_{c}(f)},\qquad
+P^{(\mathrm{sim})}_{c}(f) = \frac{S^{(\mathrm{sim})}_{c}(f)}{\sum_{f} S^{(\mathrm{sim})}_{c}(f)}.
+\]
+The Jensen–Shannon divergence is
+\[
+D_{\mathrm{JS}}(P^{(\mathrm{gt})}_{c}, P^{(\mathrm{sim})}_{c}) = \tfrac{1}{2} D_{\mathrm{KL}}\!\left(P^{(\mathrm{gt})}_{c}\,\|\,M_c\right) + \tfrac{1}{2} D_{\mathrm{KL}}\!\left(P^{(\mathrm{sim})}_{c}\,\|\,M_c\right),\quad
+M_c=\tfrac{1}{2}\big(P^{(\mathrm{gt})}_{c} + P^{(\mathrm{sim})}_{c}\big).
+\]
+\paragraph{Protocol.} Welch is applied window-wise, then averaged across windows in the chosen scope. Frequency axis is in Hz. PSDs are normalized to remove units and to compare shapes only.
+
+\subsection{Autocorrelation Difference (ACF--\(\Delta\))}
+\paragraph{Definition.} For each channel \(c\), compute the normalized autocorrelation for lags \(\ell=0,\ldots,L\) with \(L=20\) on each window:
+\[
+\rho_{c,i}(\ell) = \frac{\sum_t (x_{c,i}(t)-\bar{x}_{c,i})(x_{c,i}(t+\ell)-\bar{x}_{c,i})}{\sum_t (x_{c,i}(t)-\bar{x}_{c,i})^2},
+\]
+where \(i\) indexes windows. Average over windows to obtain \(\bar{\rho}^{(\mathrm{gt})}_{c}(\ell)\) and \(\bar{\rho}^{(\mathrm{sim})}_{c}(\ell)\). Report mean absolute difference for lags \(1\) to \(L\):
+\[
+\Delta_{\mathrm{ACF},c} = \frac{1}{L}\sum_{\ell=1}^L \left|\bar{\rho}^{(\mathrm{gt})}_{c}(\ell) - \bar{\rho}^{(\mathrm{sim})}_{c}(\ell)\right|.
+\]
+\paragraph{Protocol.} We cap the number of windows used in the per-window ACF averaging to at most 512 for efficiency. Lags map to physical time as \( \ell \cdot \Delta t \) with \( \Delta t=0.02~\mathrm{s} \) so \(L=20\) corresponds to \(0.4~\mathrm{s}\).
+
+\subsection{Cross-Channel Correlation Delta (Frobenius)}
+\paragraph{Definition.} Flatten time within windows and stack windows, then compute \(9\times9\) Pearson correlation matrices across channels for GT and SIM:
+\[
+C^{(\mathrm{gt})} = \mathrm{corr}\big(\mathrm{reshape}(X^{(\mathrm{gt})},-1,9)\big),\qquad
+C^{(\mathrm{sim})} = \mathrm{corr}\big(\mathrm{reshape}(X^{(\mathrm{sim})},-1,9)\big).
+\]
+Distance is the Frobenius norm:
+\[
+\Delta_{\mathrm{corr}} = \left\| C^{(\mathrm{gt})} - C^{(\mathrm{sim})} \right\|_{F} = \sqrt{\sum_{i,j} \left(C^{(\mathrm{gt})}_{ij} - C^{(\mathrm{sim})}_{ij}\right)^2}.
+\]
+\paragraph{Protocol.} Correlations are computed on standardized values pooled across all samples and timepoints in the given scope. This tests whether inter-sensor coupling is preserved.
+
+\subsection{Maximum Mean Discrepancy (MMD) with RBF kernel}
+\paragraph{Definition.} Flatten each window to \(x \in \mathbb{R}^{T\cdot C}=\mathbb{R}^{1152}\). With kernel \(k(x,y)=\exp(-\gamma\|x-y\|^2)\),
+\[
+\mathrm{MMD}^2(X,Y) = \mathbb{E}_{x,x'}[k(x,x')] + \mathbb{E}_{y,y'}[k(y,y')] - 2\,\mathbb{E}_{x,y}[k(x,y)].
+\]
+\paragraph{Protocol.} We size-match sets, optionally subsample to at most 2000 windows for tractability, and set \(\gamma\) using the median heuristic on pairwise squared distances over the concatenated sample set. Kernel matrices use zeroed diagonals for the within-set terms and the standard average for cross terms.
+
+\section{Scopes, Pooling, and Size Matching}
+\begin{itemize}[leftmargin=1.25em]
+\item \textbf{Global scope}:
+  \begin{itemize}
+    \item Choose \( n = \min(N_{\text{eval}}^{\mathrm{gt}}, N_{\text{sim}}) \).
+    \item Take the first \(n\) windows from each set after standardization.
+    \item Compute PSD--JS per channel, ACF--\(\Delta\) per channel, \(\Delta_{\mathrm{corr}}\) on all channels, and MMD on flattened windows.
+  \end{itemize}
+\item \textbf{Per-class scope}:
+  \begin{itemize}
+    \item For each class \(k\), let \( n_k = \min(N_{k}^{\mathrm{gt}}, N_{k}^{\mathrm{sim}}) \).
+    \item Use the first \(n_k\) windows for GT and SIM in class \(k\).
+    \item Compute the same metrics as above. PSD--JS and ACF--\(\Delta\) are reported per channel. \(\Delta_{\mathrm{corr}}\) is a single scalar per class. MMD is per class using flattened windows.
+  \end{itemize}
+\end{itemize}
+
+\section{Outputs and Figures}
+\subsection{Artifacts}
+\begin{itemize}[leftmargin=1.25em]
+\item \texttt{results\_sim.json}: experiment metadata, simulator parameters, global metrics, per-class metrics, counts.
+\item Figures in \texttt{experiments/time\_series\_har/figures}:
+  \begin{itemize}
+    \item Global overlays: PSD and ACF for channel 0.
+    \item Per-class grids in \texttt{figures/per\_class/}: \(3\times3\) overlays for PSD and ACF across all channels.
+  \end{itemize}
+\end{itemize}
+
+\subsection{Interpreting Scales}
+\begin{itemize}[leftmargin=1.25em]
+\item PSD--JS \( \in [0,\ln 2] \): lower is more similar spectral shape.
+\item ACF--\(\Delta\) \( \ge 0 \): lower indicates closer short-lag temporal dependencies, here up to \(0.4~\mathrm{s}\).
+\item \(\Delta_{\mathrm{corr}} \ge 0 \): lower means inter-sensor relationships are closer.
+\item MMD \( \ge 0 \): lower indicates closer global distributions in the full window space.
+\end{itemize}
+
+\section{Reproducibility and Execution}
+\subsection{CLI}
+From the repository root:
+\begin{verbatim}
+python -m experiments.time_series_har.run \
+  --seed 42 \
+  --n_sim 4000 \
+  --sg_window 15 --sg_poly 3 \
+  --segments_min 3 --segments_max 6 \
+  --seglen_min_frac 0.15 --seglen_max_frac 0.35 \
+  --residual_scale 1.0 \
+  --reconstruct mul \
+  --out results_sim.json
+\end{verbatim}
+
+\subsection{Determinism}
+Seeding is applied for simulation and evaluation selection. Standardization parameters are computed on train only and cached. The evaluation size matching step ensures that compared sets have equal counts.
+
+\section{Current Findings at a Glance}
+Dynamic activities that contain clear periodic motion, such as \texttt{WALKING}, \texttt{WALKING\_UPSTAIRS}, and \texttt{WALKING\_DOWNSTAIRS}, show low PSD--JS and MMD with modest ACF--\(\Delta\) and small \(\Delta_{\mathrm{corr}}\). Stationary activities such as \texttt{SITTING} and \texttt{STANDING} exhibit larger deviations, indicating that small-amplitude, low-variance dynamics and subtle cross-channel couplings are harder to mimic with the current DFM-mosaic configuration. These effects are visible in the per-class \(3\times3\) grids.
+
+\section{Next Steps}
+\begin{enumerate}[leftmargin=1.25em]
+\item Class-specific simulator tuning for stationary classes: shorter segments, more segments, larger residual scale, or an explicit micro-jitter process.
+\item Add learned synthetic generators for 3-way comparisons: GT vs SIM vs SYN with identical metrics.
+\item Export LaTeX tables directly from \texttt{results\_sim.json} for inclusion in manuscripts.
+\item Optional utility tests: cross-train accuracy using a lightweight classifier to relate fidelity to downstream performance.
+\end{enumerate}
+
+\bibliographystyle{plain}
+\begin{thebibliography}{1}
+\bibitem{gretton2012kernel}
+Arthur Gretton, Karsten~M. Borgwardt, Malte J. Rasch, Bernhard Sch\"{o}lkopf,
+and Alexander Smola.
+\newblock A kernel two-sample test.
+\newblock \emph{Journal of Machine Learning Research}, 13:723--773, 2012.
+\end{thebibliography}
+
+\end{document}

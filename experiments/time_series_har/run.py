@@ -3,6 +3,8 @@ import argparse, json
 from pathlib import Path
 import numpy as np
 from experiments.time_series_har.evaluate import evaluate_ts, evaluate_ts_by_class
+from experiments.time_series_har.synth_timegan import TGParams, train_and_sample_timegan
+
 
 
 def _to_native(o):
