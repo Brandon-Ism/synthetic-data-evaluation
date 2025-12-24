@@ -34,21 +34,12 @@ This writes:
 
 ### Installation
 
-This repository includes a pinned `requirements.txt` (an environment freeze). On some platforms (e.g., macOS), certain pinned wheels (notably CUDA-related packages) may not install.
-
-- **Option A (use pinned file, if it works on your machine)**:
-
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-- **Option B (minimal install for the CLI experiments)**: install the typical scientific stack + SDV:
-
-```bash
-pip install numpy pandas scipy scikit-learn matplotlib sdv
-```
 
 ### Running experiments
 
@@ -82,9 +73,6 @@ Outputs:
 - `experiments/time_series_har/figures/` (global overlays + per-class grids)
 - `experiments/time_series_har/<out>` (results JSON)
 
-#### Note on `experiments/bank_marketing`
-
-The current `experiments/bank_marketing` code is effectively a copy of `experiments/adult_tabular` (including downloading the Adult dataset). Treat it as **work-in-progress / placeholder** unless updated.
 
 ### Repository layout
 
@@ -93,22 +81,9 @@ The current `experiments/bank_marketing` code is effectively a copy of `experime
   - `io.py`: JSON writing + runtime metadata helpers
   - `sampling.py`: global seeding
   - `viz.py`: plotting helpers used by experiments
-- `experiments/`: reproducible CLI pipelines (see above)
-- `docs/`: LaTeX/PDF writeups (method + reproducible commands)
-- `notebooks/`: standalone tutorial notebook(s)
-- `artifacts/`, `results/`, `scripts/`: present but currently minimal/empty in this branch
+- `experiments/`: reproducible CLI pipelines
+- `docs/`: LaTeX/PDF writeups 
+- `notebooks/`: standalone tutorial notebook
 
-### Related project: privacy–utility notebook pipeline (dev branch only)
 
-There is an additional, closely related notebook-based pipeline on the **`dev` branch** under `synth_data_privacy_utility/`. It contains a single pipeline executed on two datasets (Adult and Bank) with notebooks split by pipeline stage, plus cached outputs.
 
-To view it (without merging into `main`):
-
-```bash
-git checkout dev
-```
-
-### Reproducibility notes
-
-- Experiments expose a `--seed` flag and use consistent preprocessing (fit on train only; evaluate on a held-out split).
-- Metrics are computed in a **common numeric representation** (standardized continuous + one-hot categorical for tabular; standardized windows for HAR).
