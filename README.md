@@ -2,6 +2,20 @@
 
 Information-theoretic evaluation of **synthetic**, **simulated**, and **ground-truth** data, with a focus on fidelity metrics (e.g., Jensen–Shannon divergence, MMD, classifier two-sample tests) across multiple data modalities.
 
+### Publications
+
+- **[Add publication title]** — *[Venue]*, [Year]. (`[link]`)
+
+```bibtex
+@article{add_key_here,
+  title   = {Add Title Here},
+  author  = {Add Authors Here},
+  journal = {Add Venue Here},
+  year    = {20XX},
+  url     = {Add URL Here}
+}
+```
+
 ### What’s in this repo
 
 - **Core experiment pipelines (CLI)**: under `experiments/`
