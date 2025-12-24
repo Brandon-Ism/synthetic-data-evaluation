@@ -4,17 +4,7 @@ Information-theoretic evaluation of **synthetic**, **simulated**, and **ground-t
 
 ### Publications
 
-- **[Add publication title]** — *[Venue]*, [Year]. (`[link]`)
-
-```bibtex
-@article{add_key_here,
-  title   = {Add Title Here},
-  author  = {Add Authors Here},
-  journal = {Add Venue Here},
-  year    = {20XX},
-  url     = {Add URL Here}
-}
-```
+- B. Ismalej, X. Ruan, X. Jiang, “Evaluating Privacy and Utility of Synthetic Tabular Data with Membership Inference Attacks”. In press to IEEE Future Machine Learning and Data Science (FMLDS) 2025, Nov 2-5, 2025, Los Angeles, CA, USA.
 
 ### What’s in this repo
 
