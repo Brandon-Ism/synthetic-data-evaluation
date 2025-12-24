@@ -6,6 +6,9 @@ Information-theoretic evaluation of **synthetic**, **simulated**, and **ground-t
 
 - B. Ismalej, X. Ruan, X. Jiang, “Evaluating Privacy and Utility of Synthetic Tabular Data with Membership Inference Attacks”. In press to IEEE Future Machine Learning and Data Science (FMLDS) 2025, Nov 2-5, 2025, Los Angeles, CA, USA.
 
+## Project Page
+- More context + talk slides: [Project page on my website](https://github.com/Brandon-Ism/synthetic-data-evaluation)
+
 ### What’s in this repo
 
 - **Core experiment pipelines (CLI)**: under `experiments/`
